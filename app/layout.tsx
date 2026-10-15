@@ -1,12 +1,21 @@
+
 import type { Metadata } from "next";
 import "./globals.css";
-import { Navbar } from "@/components/navbar";
-import { Footer } from "@/components/footer";
 
 export const metadata: Metadata = {
-  title: "Betty — 3D Box Mockup Studio",
-  description: "Design, customize and download professional 3D box mockups with six editable faces."
+  title: "Betty | 3D Packaging Studio",
+  description:
+    "Design, customize, and preview product packaging in 3D with Betty.",
 };
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><Navbar />{children}<Footer /></body></html>;
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
 }
