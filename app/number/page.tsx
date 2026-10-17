@@ -1,11 +1,127 @@
+
 'use client';
 
 import { useEffect, useState } from 'react';
 import { onValue, ref } from 'firebase/database';
 import { db } from '@/lib/firebase';
 
+const PAGE_SIZE = 100;
+
+type UserRecord = {
+  mail?: unknown;
+  createdAt?: unknown;
+  created_at?: unknown;
+  timestamp?: unknown;
+  dateCreated?: unknown;
+  registeredAt?: unknown;
+  created?: unknown;
+  date?: unknown;
+};
+
+type EmailEntry = {
+  email: string;
+  key: string;
+  createdTime: number | null;
+};
+
+function getCreatedTime(user: UserRecord): number | null {
+  const fields = [
+    user.createdAt,
+    user.created_at,
+    user.timestamp,
+    user.dateCreated,
+    user.registeredAt,
+    user.created,
+    user.date,
+  ];
+
+  for (const value of fields) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      // Support Unix timestamps in seconds or milliseconds.
+      return value < 1e12 ? value * 1000 : value;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+      const numeric = Number(value);
+
+      if (Number.isFinite(numeric)) {
+        return numeric < 1e12 ? numeric * 1000 : numeric;
+      }
+
+      const parsed = Date.parse(value);
+
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
+// Firebase push IDs contain their creation time in the first 8 characters.
+function getPushIdTime(key: string): number | null {
+  const alphabet =
+    '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
+
+  if (!/^[\w-]{20}$/.test(key)) {
+    return null;
+  }
+
+  let time = 0;
+
+  for (const char of key.slice(0, 8)) {
+    const digit = alphabet.indexOf(char);
+
+    if (digit < 0) return null;
+
+    time = time * 64 + digit;
+  }
+
+  return time;
+}
+
+function isValidEmail(email: string): boolean {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return false;
+  }
+
+  if (email.includes('..')) {
+    return false;
+  }
+
+  const parts = email.split('@');
+
+  if (parts.length !== 2) {
+    return false;
+  }
+
+  const [localPart, domain] = parts;
+
+  if (
+    !localPart ||
+    !domain ||
+    localPart.startsWith('.') ||
+    localPart.endsWith('.') ||
+    domain.startsWith('.') ||
+    domain.endsWith('.')
+  ) {
+    return false;
+  }
+
+  const labels = domain.split('.');
+
+  return labels.every(
+    (label) =>
+      label.length > 0 &&
+      !label.startsWith('-') &&
+      !label.endsWith('-')
+  );
+}
+
 export default function Retrieve() {
-  const [emails, setEmails] = useState<string[]>([]);
+  const [emails, setEmails] = useState<EmailEntry[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -16,88 +132,72 @@ export default function Retrieve() {
     const unsubscribe = onValue(
       usersRef,
       (snapshot) => {
-        const users = snapshot.val();
+        const users = snapshot.val() as
+          | Record<string, UserRecord | null>
+          | null;
 
         if (!users || typeof users !== 'object') {
           setEmails([]);
+          setCurrentPage(1);
           setLoading(false);
           return;
         }
 
-        const emailList = Object.values(
-          users as Record<string, { mail?: unknown } | null>
-        )
-          .map((user) =>
-            typeof user?.mail === 'string'
-              ? user.mail.trim()
-              : ''
-          )
-          .filter((email) => {
-            // Basic email format validation
-            const basicEmailRegex =
-              /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const entries: EmailEntry[] = Object.entries(users)
+          .map(([key, user]) => {
+            const email =
+              typeof user?.mail === 'string'
+                ? user.mail.trim()
+                : '';
 
-            // Reject empty or incorrectly formatted addresses
-            if (!basicEmailRegex.test(email)) {
-              return false;
-            }
+            const createdTime = user
+              ? getCreatedTime(user)
+              : null;
 
-            // Reject consecutive dots anywhere in the address
-            if (email.includes('..')) {
-              return false;
-            }
-
-            const [localPart, domain] = email.split('@');
-
-            // Reject missing parts
-            if (!localPart || !domain) {
-              return false;
-            }
-
-            // Reject local parts starting or ending with a dot
-            if (
-              localPart.startsWith('.') ||
-              localPart.endsWith('.')
-            ) {
-              return false;
-            }
-
-            // Reject domains starting or ending with a dot
-            if (
-              domain.startsWith('.') ||
-              domain.endsWith('.')
-            ) {
-              return false;
-            }
-
-            // Reject domain labels that start or end with a hyphen
-            const domainLabels = domain.split('.');
-
-            if (
-              domainLabels.some(
-                (label) =>
-                  !label ||
-                  label.startsWith('-') ||
-                  label.endsWith('-')
-              )
-            ) {
-              return false;
-            }
-
-            return true;
-          });
-
-        // Remove duplicate emails, ignoring letter case
-        const uniqueEmails = Array.from(
-          new Map(
-            emailList.map((email) => [
-              email.toLowerCase(),
+            return {
               email,
-            ])
-          ).values()
-        );
+              key,
+              createdTime:
+                createdTime ?? getPushIdTime(key),
+            };
+          })
+          .filter((entry) => isValidEmail(entry.email));
 
-        setEmails(uniqueEmails);
+        // Oldest records first.
+        entries.sort((a, b) => {
+          if (
+            a.createdTime !== null &&
+            b.createdTime !== null
+          ) {
+            return (
+              a.createdTime - b.createdTime ||
+              a.key.localeCompare(b.key)
+            );
+          }
+
+          if (a.createdTime !== null) return -1;
+          if (b.createdTime !== null) return 1;
+
+          // Fallback when timestamps are unavailable.
+          return a.key.localeCompare(b.key);
+        });
+
+        // Deduplicate after sorting so the oldest occurrence wins.
+        const seen = new Set<string>();
+
+        const uniqueEntries = entries.filter((entry) => {
+          const normalized = entry.email.toLowerCase();
+
+          if (seen.has(normalized)) {
+            return false;
+          }
+
+          seen.add(normalized);
+          return true;
+        });
+
+        setEmails(uniqueEntries);
+        setCurrentPage(1);
         setError('');
         setLoading(false);
       },
@@ -111,7 +211,15 @@ export default function Retrieve() {
     return () => unsubscribe();
   }, []);
 
-  // Copy text to clipboard
+  const totalPages = Math.ceil(emails.length / PAGE_SIZE);
+
+  const startIndex = (currentPage - 1) * PAGE_SIZE;
+
+  const currentEmails = emails.slice(
+    startIndex,
+    startIndex + PAGE_SIZE
+  );
+
   const copyText = async (text: string) => {
     try {
       if (navigator.clipboard && window.isSecureContext) {
@@ -131,7 +239,7 @@ export default function Retrieve() {
         document.body.removeChild(textarea);
 
         if (!successful) {
-          throw new Error('Copy failed');
+          throw new Error('Clipboard copy failed.');
         }
       }
 
@@ -140,26 +248,24 @@ export default function Retrieve() {
       console.error('Clipboard error:', err);
       setMessage('Unable to copy. Please try again.');
     }
-
-    setTimeout(() => setMessage(''), 3000);
   };
 
-  // Copy all emails for an email app's To field
-  const copyAllEmails = () => {
-    if (emails.length === 0) {
-      setMessage('No valid email addresses to copy.');
+  // Copy only emails on the currently selected page.
+  const copyCurrentPage = () => {
+    if (currentEmails.length === 0) {
+      setMessage('No email addresses on this page.');
       return;
     }
 
-    copyText(emails.join(', '));
+    copyText(
+      currentEmails.map((entry) => entry.email).join(', ')
+    );
   };
 
-  // Copy one email address
   const copySingleEmail = (email: string) => {
     copyText(email);
   };
 
-  // Download helper
   const downloadFile = (
     content: string,
     filename: string,
@@ -176,46 +282,39 @@ export default function Retrieve() {
     link.click();
     document.body.removeChild(link);
 
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  // Download TXT: one email per line
+  // Downloads include all valid, unique emails in oldest-first order.
   const downloadTXT = () => {
-    if (emails.length === 0) {
-      setMessage('No valid email addresses to download.');
-      return;
-    }
-
     downloadFile(
-      emails.join('\n'),
+      emails.map((entry) => entry.email).join('\n'),
       'emails.txt',
       'text/plain;charset=utf-8'
     );
   };
 
-  // Download JSON: an array of email addresses
   const downloadJSON = () => {
-    if (emails.length === 0) {
-      setMessage('No valid email addresses to download.');
-      return;
-    }
-
     downloadFile(
-      JSON.stringify(emails, null, 2),
+      JSON.stringify(
+        emails.map((entry) => entry.email),
+        null,
+        2
+      ),
       'emails.json',
       'application/json'
     );
   };
 
   return (
-    <main className="mx-auto w-full max-w-3xl p-6">
+    <main className="mx-auto w-full max-w-4xl p-6">
       <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h1 className="mb-2 text-2xl font-bold text-gray-900">
           Email Addresses
         </h1>
 
         <p className="mb-5 text-sm text-gray-500">
-          Retrieve, validate, and export email addresses from Firebase.
+          Emails are sorted oldest first and displayed 100 per page.
         </p>
 
         {loading && (
@@ -244,39 +343,39 @@ export default function Retrieve() {
             <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <button
                 type="button"
-                onClick={copyAllEmails}
-                disabled={emails.length === 0}
-                className="rounded-lg bg-blue-600 px-4 py-3 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={copyCurrentPage}
+                disabled={currentEmails.length === 0}
+                className="rounded-lg bg-blue-600 px-4 py-3 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                Copy All Emails
+                Copy Current Page ({currentEmails.length})
               </button>
 
               <button
                 type="button"
                 onClick={downloadTXT}
                 disabled={emails.length === 0}
-                className="rounded-lg bg-green-600 px-4 py-3 font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-green-600 px-4 py-3 font-medium text-white hover:bg-green-700 disabled:opacity-50"
               >
-                Download TXT
+                Download All TXT
               </button>
 
               <button
                 type="button"
                 onClick={downloadJSON}
                 disabled={emails.length === 0}
-                className="rounded-lg bg-purple-600 px-4 py-3 font-medium text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-purple-600 px-4 py-3 font-medium text-white hover:bg-purple-700 disabled:opacity-50"
               >
-                Download JSON
+                Download All JSON
               </button>
             </div>
 
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-semibold text-gray-800">
                 Valid email addresses
               </h2>
 
               <span className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
-                {emails.length} unique
+                {emails.length} unique emails
               </span>
             </div>
 
@@ -285,33 +384,77 @@ export default function Retrieve() {
                 No valid email addresses found.
               </p>
             ) : (
-              <ul className="max-h-[500px] divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200">
-                {emails.map((email) => (
-                  <li
-                    key={email.toLowerCase()}
-                    className="flex items-center justify-between gap-3 p-3 transition hover:bg-gray-50"
-                  >
-                    <span className="min-w-0 break-all text-sm text-gray-700">
-                      {email}
-                    </span>
+              <>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm text-gray-600">
+                    Showing {startIndex + 1}–
+                    {Math.min(startIndex + PAGE_SIZE, emails.length)} of{' '}
+                    {emails.length}
+                  </p>
 
-                    <button
-                      type="button"
-                      onClick={() => copySingleEmail(email)}
-                      className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
-                      aria-label={`Copy ${email}`}
+                  <p className="text-sm font-medium text-gray-700">
+                    Page {currentPage} of {totalPages}
+                  </p>
+                </div>
+
+                <ul className="max-h-[500px] divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200">
+                  {currentEmails.map((entry) => (
+                    <li
+                      key={entry.key}
+                      className="flex items-center justify-between gap-3 p-3 hover:bg-gray-50"
                     >
-                      Copy
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                      <span className="min-w-0 break-all text-sm text-gray-700">
+                        {entry.email}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => copySingleEmail(entry.email)}
+                        className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                      >
+                        Copy
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="mt-5 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrentPage((page) => Math.max(1, page - 1))
+                    }
+                    disabled={currentPage === 1}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+
+                  <span className="text-sm text-gray-600">
+                    {currentPage} / {totalPages}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrentPage((page) =>
+                        Math.min(totalPages, page + 1)
+                      )
+                    }
+                    disabled={currentPage >= totalPages}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              </>
             )}
 
             <p className="mt-4 text-xs text-gray-500">
-              Invalid formats and addresses containing consecutive dots
-              are excluded. Duplicate addresses are removed without
-              deleting or changing Firebase records.
+              Copy Current Page copies no more than 100 emails. Downloads
+              include all valid, unique addresses. Invalid addresses and
+              consecutive dots are filtered out; Firebase records are
+              not deleted or modified.
             </p>
           </>
         )}
