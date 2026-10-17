@@ -1,26 +1,24 @@
+'use client';
 
-"use client";
-
-import { useEffect, useState } from "react";
-import { onValue, ref } from "firebase/database";
-import { db } from "@/lib/firebase";
+import { useEffect, useState } from 'react';
+import { onValue, ref } from 'firebase/database';
+import { db } from '@/lib/firebase';
 
 export default function Retrieve() {
   const [emails, setEmails] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [copied, setCopied] = useState("");
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
 
-  // Fetch email addresses from Firebase.
   useEffect(() => {
-    const usersRef = ref(db, "USERS");
+    const usersRef = ref(db, 'USERS');
 
     const unsubscribe = onValue(
       usersRef,
       (snapshot) => {
         const users = snapshot.val();
 
-        if (!users) {
+        if (!users || typeof users !== 'object') {
           setEmails([]);
           setLoading(false);
           return;
@@ -30,15 +28,66 @@ export default function Retrieve() {
           users as Record<string, { mail?: unknown } | null>
         )
           .map((user) =>
-            typeof user?.mail === "string"
+            typeof user?.mail === 'string'
               ? user.mail.trim()
-              : ""
+              : ''
           )
-          .filter((email) =>
-            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-          );
+          .filter((email) => {
+            // Basic email format validation
+            const basicEmailRegex =
+              /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-        // Remove duplicates, ignoring capitalization.
+            // Reject empty or incorrectly formatted addresses
+            if (!basicEmailRegex.test(email)) {
+              return false;
+            }
+
+            // Reject consecutive dots anywhere in the address
+            if (email.includes('..')) {
+              return false;
+            }
+
+            const [localPart, domain] = email.split('@');
+
+            // Reject missing parts
+            if (!localPart || !domain) {
+              return false;
+            }
+
+            // Reject local parts starting or ending with a dot
+            if (
+              localPart.startsWith('.') ||
+              localPart.endsWith('.')
+            ) {
+              return false;
+            }
+
+            // Reject domains starting or ending with a dot
+            if (
+              domain.startsWith('.') ||
+              domain.endsWith('.')
+            ) {
+              return false;
+            }
+
+            // Reject domain labels that start or end with a hyphen
+            const domainLabels = domain.split('.');
+
+            if (
+              domainLabels.some(
+                (label) =>
+                  !label ||
+                  label.startsWith('-') ||
+                  label.endsWith('-')
+              )
+            ) {
+              return false;
+            }
+
+            return true;
+          });
+
+        // Remove duplicate emails, ignoring letter case
         const uniqueEmails = Array.from(
           new Map(
             emailList.map((email) => [
@@ -49,12 +98,12 @@ export default function Retrieve() {
         );
 
         setEmails(uniqueEmails);
-        setError("");
+        setError('');
         setLoading(false);
       },
       (err) => {
-        console.error("Error fetching emails:", err);
-        setError("Failed to fetch email addresses.");
+        console.error('Firebase error:', err);
+        setError('Failed to retrieve emails from Firebase.');
         setLoading(false);
       }
     );
@@ -62,84 +111,55 @@ export default function Retrieve() {
     return () => unsubscribe();
   }, []);
 
-  // Copy text to clipboard with a fallback.
+  // Copy text to clipboard
   const copyText = async (text: string) => {
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
       } else {
-        const textarea = document.createElement("textarea");
+        const textarea = document.createElement('textarea');
+
         textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.left = "-9999px";
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
 
         document.body.appendChild(textarea);
-        textarea.focus();
         textarea.select();
 
-        const success = document.execCommand("copy");
-        textarea.remove();
+        const successful = document.execCommand('copy');
 
-        if (!success) {
-          throw new Error("Clipboard copy failed");
+        document.body.removeChild(textarea);
+
+        if (!successful) {
+          throw new Error('Copy failed');
         }
       }
 
-      return true;
+      setMessage('Copied successfully!');
     } catch (err) {
-      console.error("Copy failed:", err);
-      return false;
+      console.error('Clipboard error:', err);
+      setMessage('Unable to copy. Please try again.');
     }
+
+    setTimeout(() => setMessage(''), 3000);
   };
 
-  // Copy all addresses for an email app's To field.
-  const copyAllEmails = async () => {
-    if (!emails.length) return;
+  // Copy all emails for an email app's To field
+  const copyAllEmails = () => {
+    if (emails.length === 0) {
+      setMessage('No valid email addresses to copy.');
+      return;
+    }
 
-    // Comma-separated addresses are suitable for the To field.
-    const success = await copyText(emails.join(", "));
-
-    setCopied(
-      success
-        ? `Copied ${emails.length} email addresses! Paste into To or BCC.`
-        : "Copy failed. Please try again."
-    );
+    copyText(emails.join(', '));
   };
 
-  // Copy a single email address.
-  const copySingleEmail = async (email: string) => {
-    const success = await copyText(email);
-
-    setCopied(
-      success
-        ? `Copied ${email}`
-        : "Copy failed. Please try again."
-    );
+  // Copy one email address
+  const copySingleEmail = (email: string) => {
+    copyText(email);
   };
 
-  // Download TXT: one email address per line.
-  const downloadTXT = () => {
-    if (!emails.length) return;
-
-    downloadFile(
-      emails.join("\n"),
-      "email-addresses.txt",
-      "text/plain;charset=utf-8"
-    );
-  };
-
-  // Download JSON: an array of email addresses only.
-  const downloadJSON = () => {
-    if (!emails.length) return;
-
-    downloadFile(
-      JSON.stringify(emails, null, 2),
-      "email-addresses.json",
-      "application/json;charset=utf-8"
-    );
-  };
-
-  // Shared download helper.
+  // Download helper
   const downloadFile = (
     content: string,
     filename: string,
@@ -147,204 +167,155 @@ export default function Retrieve() {
   ) => {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+    const link = document.createElement('a');
 
     link.href = url;
     link.download = filename;
 
     document.body.appendChild(link);
     link.click();
-    link.remove();
+    document.body.removeChild(link);
 
-    // Delay revocation to allow the download to start.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    URL.revokeObjectURL(url);
+  };
+
+  // Download TXT: one email per line
+  const downloadTXT = () => {
+    if (emails.length === 0) {
+      setMessage('No valid email addresses to download.');
+      return;
+    }
+
+    downloadFile(
+      emails.join('\n'),
+      'emails.txt',
+      'text/plain;charset=utf-8'
+    );
+  };
+
+  // Download JSON: an array of email addresses
+  const downloadJSON = () => {
+    if (emails.length === 0) {
+      setMessage('No valid email addresses to download.');
+      return;
+    }
+
+    downloadFile(
+      JSON.stringify(emails, null, 2),
+      'emails.json',
+      'application/json'
+    );
   };
 
   return (
-    <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      {/* Header */}
-      <div className="border-b border-slate-200 px-5 py-5 sm:px-6">
-        <h2 className="text-lg font-semibold text-slate-900">
+    <main className="mx-auto w-full max-w-3xl p-6">
+      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h1 className="mb-2 text-2xl font-bold text-gray-900">
           Email Addresses
-        </h2>
+        </h1>
 
-        <p className="mt-1 text-sm text-slate-500">
-          Manage, copy, and export subscriber email addresses.
+        <p className="mb-5 text-sm text-gray-500">
+          Retrieve, validate, and export email addresses from Firebase.
         </p>
-      </div>
 
-      {/* Summary and action buttons */}
-      <div className="flex flex-col gap-4 border-b border-slate-100 bg-slate-50/70 px-5 py-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 min-w-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800">
-            {loading ? "..." : emails.length}
-          </span>
-
-          <div>
-            <p className="text-sm font-medium text-slate-800">
-              {loading
-                ? "Loading email addresses"
-                : "Unique email addresses"}
-            </p>
-
-            <p className="text-xs text-slate-500">
-              Email addresses only. No names or phone numbers.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-3">
-          {/* Copy all */}
-          <button
-            type="button"
-            onClick={copyAllEmails}
-            disabled={loading || emails.length === 0}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.8}
-              stroke="currentColor"
-              className="h-5 w-5"
-            >
-              <rect x="8" y="8" width="13" height="13" rx="2" />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"
-              />
-            </svg>
-            Copy All Emails
-          </button>
-
-          {/* Download TXT */}
-          <button
-            type="button"
-            onClick={downloadTXT}
-            disabled={loading || emails.length === 0}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Download TXT
-          </button>
-
-          {/* Download JSON */}
-          <button
-            type="button"
-            onClick={downloadJSON}
-            disabled={loading || emails.length === 0}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Download JSON
-          </button>
-        </div>
-
-        {/* Copy feedback */}
-        {copied && (
-          <div
-            role="status"
-            className="flex items-center justify-between gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
-          >
-            <span>{copied}</span>
-
-            <button
-              type="button"
-              onClick={() => setCopied("")}
-              className="shrink-0 font-medium hover:underline"
-            >
-              Dismiss
-            </button>
-          </div>
+        {loading && (
+          <p className="py-4 text-gray-500">
+            Loading email addresses...
+          </p>
         )}
-      </div>
 
-      {/* Email list */}
-      <div className="p-5 sm:p-6">
-        {loading ? (
-          <div className="py-10 text-center text-sm text-slate-500">
-            Fetching email addresses from Firebase...
-          </div>
-        ) : error ? (
-          <div
-            role="alert"
-            className="rounded-xl bg-red-50 p-4 text-sm text-red-600"
-          >
+        {error && (
+          <p className="mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
             {error}
-          </div>
-        ) : emails.length === 0 ? (
-          <div className="py-10 text-center">
-            <p className="text-sm font-medium text-slate-700">
-              No email addresses found.
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              Check that your USERS records contain a valid mail field.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-slate-200">
-            <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Email list
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                Click any address to copy it individually.
-              </p>
+          </p>
+        )}
+
+        {message && (
+          <p
+            role="status"
+            className="mb-4 rounded-md bg-blue-50 p-3 text-sm text-blue-700"
+          >
+            {message}
+          </p>
+        )}
+
+        {!loading && !error && (
+          <>
+            <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={copyAllEmails}
+                disabled={emails.length === 0}
+                className="rounded-lg bg-blue-600 px-4 py-3 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Copy All Emails
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadTXT}
+                disabled={emails.length === 0}
+                className="rounded-lg bg-green-600 px-4 py-3 font-medium text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Download TXT
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadJSON}
+                disabled={emails.length === 0}
+                className="rounded-lg bg-purple-600 px-4 py-3 font-medium text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Download JSON
+              </button>
             </div>
 
-            <ol className="max-h-[500px] divide-y divide-slate-100 overflow-y-auto">
-              {emails.map((email, index) => (
-                <li
-                  key={email.toLowerCase()}
-                  className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50"
-                >
-                  <span className="w-7 shrink-0 text-right text-xs text-slate-400">
-                    {index + 1}.
-                  </span>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-800">
+                Valid email addresses
+              </h2>
 
-                  <button
-                    type="button"
-                    onClick={() => copySingleEmail(email)}
-                    title="Click to copy this email address"
-                    className="min-w-0 flex-1 break-all text-left text-sm text-slate-700 hover:text-blue-600 hover:underline"
-                  >
-                    {email}
-                  </button>
+              <span className="rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700">
+                {emails.length} unique
+              </span>
+            </div>
 
-                  <button
-                    type="button"
-                    onClick={() => copySingleEmail(email)}
-                    aria-label={`Copy ${email}`}
-                    className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-blue-50 hover:text-blue-600"
+            {emails.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-gray-500">
+                No valid email addresses found.
+              </p>
+            ) : (
+              <ul className="max-h-[500px] divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200">
+                {emails.map((email) => (
+                  <li
+                    key={email.toLowerCase()}
+                    className="flex items-center justify-between gap-3 p-3 transition hover:bg-gray-50"
                   >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      strokeWidth={1.8}
-                      stroke="currentColor"
-                      className="h-4 w-4"
+                    <span className="min-w-0 break-all text-sm text-gray-700">
+                      {email}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => copySingleEmail(email)}
+                      className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                      aria-label={`Copy ${email}`}
                     >
-                      <rect
-                        x="8"
-                        y="8"
-                        width="13"
-                        height="13"
-                        rx="2"
-                      />
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"
-                      />
-                    </svg>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </div>
+                      Copy
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="mt-4 text-xs text-gray-500">
+              Invalid formats and addresses containing consecutive dots
+              are excluded. Duplicate addresses are removed without
+              deleting or changing Firebase records.
+            </p>
+          </>
         )}
       </div>
-    </div>
+    </main>
   );
 }
