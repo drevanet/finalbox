@@ -37,7 +37,6 @@ function getCreatedTime(user: UserRecord): number | null {
 
   for (const value of fields) {
     if (typeof value === 'number' && Number.isFinite(value)) {
-      // Support Unix timestamps in seconds or milliseconds.
       return value < 1e12 ? value * 1000 : value;
     }
 
@@ -59,7 +58,7 @@ function getCreatedTime(user: UserRecord): number | null {
   return null;
 }
 
-// Firebase push IDs contain their creation time in the first 8 characters.
+// Firebase push IDs contain their creation time.
 function getPushIdTime(key: string): number | null {
   const alphabet =
     '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
@@ -109,9 +108,7 @@ function isValidEmail(email: string): boolean {
     return false;
   }
 
-  const labels = domain.split('.');
-
-  return labels.every(
+  return domain.split('.').every(
     (label) =>
       label.length > 0 &&
       !label.startsWith('-') &&
@@ -150,20 +147,17 @@ export default function Retrieve() {
                 ? user.mail.trim()
                 : '';
 
-            const createdTime = user
-              ? getCreatedTime(user)
-              : null;
-
             return {
               email,
               key,
-              createdTime:
-                createdTime ?? getPushIdTime(key),
+              createdTime: user
+                ? getCreatedTime(user) ?? getPushIdTime(key)
+                : getPushIdTime(key),
             };
           })
           .filter((entry) => isValidEmail(entry.email));
 
-        // Oldest records first.
+        // Sort oldest entries first when timestamps are available.
         entries.sort((a, b) => {
           if (
             a.createdTime !== null &&
@@ -178,11 +172,11 @@ export default function Retrieve() {
           if (a.createdTime !== null) return -1;
           if (b.createdTime !== null) return 1;
 
-          // Fallback when timestamps are unavailable.
           return a.key.localeCompare(b.key);
         });
 
-        // Deduplicate after sorting so the oldest occurrence wins.
+        // Remove duplicate emails, ignoring letter case.
+        // The oldest occurrence is retained.
         const seen = new Set<string>();
 
         const uniqueEntries = entries.filter((entry) => {
@@ -211,6 +205,7 @@ export default function Retrieve() {
     return () => unsubscribe();
   }, []);
 
+  // Pagination: 100 email addresses per page.
   const totalPages = Math.ceil(emails.length / PAGE_SIZE);
 
   const startIndex = (currentPage - 1) * PAGE_SIZE;
@@ -220,6 +215,7 @@ export default function Retrieve() {
     startIndex + PAGE_SIZE
   );
 
+  // Copy text to the clipboard.
   const copyText = async (text: string) => {
     try {
       if (navigator.clipboard && window.isSecureContext) {
@@ -229,7 +225,7 @@ export default function Retrieve() {
 
         textarea.value = text;
         textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
+        textarea.style.left = '-9999px';
 
         document.body.appendChild(textarea);
         textarea.select();
@@ -250,22 +246,26 @@ export default function Retrieve() {
     }
   };
 
-  // Copy only emails on the currently selected page.
+  // Copy only the emails on the current page.
   const copyCurrentPage = () => {
     if (currentEmails.length === 0) {
       setMessage('No email addresses on this page.');
       return;
     }
 
-    copyText(
-      currentEmails.map((entry) => entry.email).join(', ')
-    );
+    const emailText = currentEmails
+      .map((entry) => entry.email)
+      .join(', ');
+
+    copyText(emailText);
   };
 
+  // Copy one email address.
   const copySingleEmail = (email: string) => {
     copyText(email);
   };
 
+  // Download helper.
   const downloadFile = (
     content: string,
     filename: string,
@@ -285,8 +285,13 @@ export default function Retrieve() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  // Downloads include all valid, unique emails in oldest-first order.
+  // Download every valid, unique email.
   const downloadTXT = () => {
+    if (emails.length === 0) {
+      setMessage('No valid email addresses to download.');
+      return;
+    }
+
     downloadFile(
       emails.map((entry) => entry.email).join('\n'),
       'emails.txt',
@@ -295,6 +300,11 @@ export default function Retrieve() {
   };
 
   const downloadJSON = () => {
+    if (emails.length === 0) {
+      setMessage('No valid email addresses to download.');
+      return;
+    }
+
     downloadFile(
       JSON.stringify(
         emails.map((entry) => entry.email),
@@ -314,7 +324,8 @@ export default function Retrieve() {
         </h1>
 
         <p className="mb-5 text-sm text-gray-500">
-          Emails are sorted oldest first and displayed 100 per page.
+          All valid email addresses are available across pages,
+          with up to 100 addresses per page.
         </p>
 
         {loading && (
@@ -332,6 +343,7 @@ export default function Retrieve() {
         {message && (
           <p
             role="status"
+            aria-live="polite"
             className="mb-4 rounded-md bg-blue-50 p-3 text-sm text-blue-700"
           >
             {message}
@@ -345,7 +357,7 @@ export default function Retrieve() {
                 type="button"
                 onClick={copyCurrentPage}
                 disabled={currentEmails.length === 0}
-                className="rounded-lg bg-blue-600 px-4 py-3 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                className="rounded-lg bg-blue-600 px-4 py-3 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Copy Current Page ({currentEmails.length})
               </button>
@@ -354,7 +366,7 @@ export default function Retrieve() {
                 type="button"
                 onClick={downloadTXT}
                 disabled={emails.length === 0}
-                className="rounded-lg bg-green-600 px-4 py-3 font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                className="rounded-lg bg-green-600 px-4 py-3 font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Download All TXT
               </button>
@@ -363,7 +375,7 @@ export default function Retrieve() {
                 type="button"
                 onClick={downloadJSON}
                 disabled={emails.length === 0}
-                className="rounded-lg bg-purple-600 px-4 py-3 font-medium text-white hover:bg-purple-700 disabled:opacity-50"
+                className="rounded-lg bg-purple-600 px-4 py-3 font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Download All JSON
               </button>
@@ -411,6 +423,7 @@ export default function Retrieve() {
                         type="button"
                         onClick={() => copySingleEmail(entry.email)}
                         className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                        aria-label={`Copy ${entry.email}`}
                       >
                         Copy
                       </button>
@@ -422,7 +435,9 @@ export default function Retrieve() {
                   <button
                     type="button"
                     onClick={() =>
-                      setCurrentPage((page) => Math.max(1, page - 1))
+                      setCurrentPage((page) =>
+                        Math.max(1, page - 1)
+                      )
                     }
                     disabled={currentPage === 1}
                     className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
@@ -431,7 +446,7 @@ export default function Retrieve() {
                   </button>
 
                   <span className="text-sm text-gray-600">
-                    {currentPage} / {totalPages}
+                    Page {currentPage} of {totalPages || 1}
                   </span>
 
                   <button
@@ -451,10 +466,10 @@ export default function Retrieve() {
             )}
 
             <p className="mt-4 text-xs text-gray-500">
-              Copy Current Page copies no more than 100 emails. Downloads
-              include all valid, unique addresses. Invalid addresses and
-              consecutive dots are filtered out; Firebase records are
-              not deleted or modified.
+              Only the current page is copied. Downloads include all
+              valid, unique addresses. Invalid formats and consecutive
+              dots are filtered out. Firebase records are not deleted
+              or modified.
             </p>
           </>
         )}
