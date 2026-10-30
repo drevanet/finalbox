@@ -2,9 +2,7 @@ import Link from "next/link";
 import { ArrowRight, Box, Check, Layers3, MousePointer2, Download, Sparkles, Palette, ShieldCheck, Zap, Move3D, Image as ImageIcon } from "lucide-react";
 
 const products = [
-  ["Organic skincare", "https://images.unsplash.com/photo-1608248543803-ba4f8c70ae0b?auto=format&fit=crop&w=900&q=85"],
-  ["Botanical tea", "https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=900&q=85"],
-  ["Premium fragrance", "https://images.unsplash.com/photo-1594035910387-fea47794261f?auto=format&fit=crop&w=900&q=85"]
+
 ];
 const features = [
   {icon:Layers3,title:"Six fully editable faces",text:"Customize the front, back, left, right, top and bottom of your packaging."},
